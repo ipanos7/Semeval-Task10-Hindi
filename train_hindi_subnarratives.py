@@ -36,11 +36,12 @@ def compute_metrics(pred):
     return {"f1_macro": f1}
 
 # --- Training with Repeated KFold ---
-def train_with_repeated_kfold(texts, labels):
+# --- Training with Repeated KFold ---
+def train_with_repeated_kfold_and_save(texts, labels):
     dataset = Dataset.from_dict({"text": texts, "label": labels.tolist()})
     dataset = dataset.map(tokenize, batched=True)
 
-    rskf = RepeatedStratifiedKFold(n_splits=5, n_repeats=20, random_state=42)
+    rskf = RepeatedStratifiedKFold(n_splits=5, n_repeats=10, random_state=42)  # Adjusted to 10 repeats for consistency
     labels_flat = labels.argmax(axis=1)
 
     all_f1_scores = []
@@ -55,13 +56,13 @@ def train_with_repeated_kfold(texts, labels):
         )
 
         training_args = TrainingArguments(
-            output_dir=f"./results_subnarratives_fold_{fold}",
+            output_dir=f"./results_fold_{fold}",
             evaluation_strategy="epoch",
             save_strategy="epoch",
-            logging_dir=f"./logs_subnarratives_fold_{fold}",
+            logging_dir=f"./logs_fold_{fold}",
             per_device_train_batch_size=8,
             per_device_eval_batch_size=8,
-            num_train_epochs=50,
+            num_train_epochs=100,
             warmup_steps=500,
             weight_decay=0.01,
             logging_steps=10,
@@ -73,6 +74,7 @@ def train_with_repeated_kfold(texts, labels):
             fp16=True
         )
 
+
         trainer = Trainer(
             model=model,
             args=training_args,
@@ -80,9 +82,8 @@ def train_with_repeated_kfold(texts, labels):
             eval_dataset=val_dataset,
             tokenizer=tokenizer,
             compute_metrics=compute_metrics,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=10)]
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=10)],
         )
-
         trainer.train()
 
         # Compute F1 on validation set
@@ -95,16 +96,23 @@ def train_with_repeated_kfold(texts, labels):
         all_f1_scores.append(f1)
         print(f"F1 Score for fold {fold+1}: {f1}")
 
+
     mean_f1 = np.mean(all_f1_scores)
     print(f"\n=== Mean F1 Score (RepeatedStratifiedKFold): {mean_f1} ===")
 
-    # Save the model and tokenizer
-    output_dir = "/content/drive/MyDrive/hindi_subnarrative_model"
-    model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    print(f"Subnarrative model and tokenizer saved to {output_dir}.")
 
+    # Save the final best model
+    final_output_dir = "/content/drive/MyDrive/upd_hindi_subnarrative_model"
+    model.save_pretrained(final_output_dir)
+    tokenizer.save_pretrained(final_output_dir)
+    print(f"Subnarrative model and tokenizer saved to {final_output_dir}.")
+
+    # Save final metrics
+    with open("/content/drive/MyDrive/upd_hindi_subnarrative_model/final_metrics.json", "w") as f:
+        json.dump({"mean_f1": mean_f1, "fold_f1_scores": all_f1_scores}, f, indent=4)
+        
     return mean_f1
+
 
 # --- Main Script ---
 if __name__ == "__main__":
@@ -124,5 +132,5 @@ if __name__ == "__main__":
     tokenizer = XLMRobertaTokenizer.from_pretrained("xlm-roberta-base")
 
     print("Training model...")
-    mean_f1 = train_with_repeated_kfold(texts, labels)
+    mean_f1 = train_with_repeated_kfold_and_save(texts, labels)
     print(f"Final Mean F1 Score: {mean_f1}")

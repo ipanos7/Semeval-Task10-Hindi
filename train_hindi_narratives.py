@@ -6,7 +6,8 @@ from sklearn.metrics import f1_score
 from scipy.special import expit
 from datasets import Dataset
 import json
-
+import torch
+from torch.nn import BCEWithLogitsLoss
 
 # --- Prepare Narrative Labels ---
 def prepare_labels(training_data, all_labels):
@@ -41,7 +42,7 @@ def train_with_repeated_kfold_and_save(texts, labels):
     dataset = Dataset.from_dict({"text": texts, "label": labels.tolist()})
     dataset = dataset.map(tokenize, batched=True)
 
-    rskf = RepeatedStratifiedKFold(n_splits=5, n_repeats=20, random_state=42)
+    rskf = RepeatedStratifiedKFold(n_splits=5, n_repeats=2, random_state=42)
     labels_flat = labels.argmax(axis=1)
 
     all_f1_scores = []
@@ -56,10 +57,10 @@ def train_with_repeated_kfold_and_save(texts, labels):
         )
 
         training_args = TrainingArguments(
+            output_dir=f"./results_fold_{fold}",
             evaluation_strategy="epoch",
             save_strategy="epoch",
-            output_dir=f"./results_fold_{fold}",  # Save locally
-            logging_dir=f"./logs_fold_{fold}",  # Save logs locally
+            logging_dir=f"./logs_fold_{fold}",
             per_device_train_batch_size=8,
             per_device_eval_batch_size=8,
             num_train_epochs=50,
@@ -71,8 +72,9 @@ def train_with_repeated_kfold_and_save(texts, labels):
             save_total_limit=1,
             learning_rate=5e-5,
             lr_scheduler_type="linear",
-            fp16=True
+            fp16=True,
         )
+
 
         trainer = Trainer(
             model=model,
@@ -81,9 +83,8 @@ def train_with_repeated_kfold_and_save(texts, labels):
             eval_dataset=val_dataset,
             tokenizer=tokenizer,
             compute_metrics=compute_metrics,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=5)]
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=10)],
         )
-
         trainer.train()
 
         # Compute F1 on validation set
@@ -96,15 +97,20 @@ def train_with_repeated_kfold_and_save(texts, labels):
         all_f1_scores.append(f1)
         print(f"F1 Score for fold {fold+1}: {f1}")
 
+       
     mean_f1 = np.mean(all_f1_scores)
     print(f"\n=== Mean F1 Score (RepeatedStratifiedKFold): {mean_f1} ===")
 
-    # Save the model and tokenizer
-    output_dir = "/content/drive/MyDrive/hindi_narrative_model"
-    model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    print(f"Narrative model and tokenizer saved to {output_dir}.")
 
+    # Save the final best model
+    final_output_dir = "/content/drive/MyDrive/hindi_narrative_model"
+    model.save_pretrained(final_output_dir)
+    tokenizer.save_pretrained(final_output_dir)
+    print(f"Narrative model and tokenizer saved to {final_output_dir}.")
+
+    # Save final metrics
+    with open("/content/drive/MyDrive/hindi_narrative_model/final_metrics.json", "w") as f:
+        json.dump({"mean_f1": mean_f1, "fold_f1_scores": all_f1_scores}, f, indent=4)
     return mean_f1
 
 # --- Main Script ---
