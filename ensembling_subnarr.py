@@ -55,13 +55,14 @@ def train_and_save_model(texts, labels, model_name, output_dir, seed):
         per_device_eval_batch_size=16,
         gradient_accumulation_steps=2,
         num_train_epochs=20,
-        warmup_steps=1000,
+        warmup_steps=500,
         weight_decay=0.01,
         learning_rate=3e-5,
         fp16=True,
         logging_steps=50,
         seed=seed,
         load_best_model_at_end=True,
+        lr_scheduler_type="cosine",
         save_total_limit=2,
     )
 
