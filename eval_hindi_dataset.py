@@ -1,59 +1,75 @@
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from sklearn.metrics import f1_score
-from scipy.special import expit
+from transformers import XLMRobertaTokenizer, XLMRobertaForSequenceClassification
 import numpy as np
-import json,torch
+import json
+import os
 
-def ensemble_predictions(models, tokenizer, texts):
-    probabilities = []
-    for model_path in models:
-        model = AutoModelForSequenceClassification.from_pretrained(model_path)
-        model.eval()
-        model.to("cuda")
+# Load models
+narrative_model = XLMRobertaForSequenceClassification.from_pretrained("/content/drive/MyDrive/hindi_narrative_model")
+narrative_tokenizer = XLMRobertaTokenizer.from_pretrained("/content/drive/MyDrive/hindi_narrative_model")
+subnarrative_model = XLMRobertaForSequenceClassification.from_pretrained("/content/drive/MyDrive/upd_hindi_subnarrative_model")
+subnarrative_tokenizer = XLMRobertaTokenizer.from_pretrained("/content/drive/MyDrive/upd_hindi_subnarrative_model")
 
-        inputs = tokenizer(texts, padding=True, truncation=True, max_length=512, return_tensors="pt").to("cuda")
-        with torch.no_grad():
-            logits = model(**inputs).logits
-            probabilities.append(expit(logits.cpu().numpy()))
+# Load all labels
+with open("/content/Semeval-Task10-Hindi/data/hindi_all_labels.json", "r") as f:
+    all_labels = json.load(f)["labels"]
 
-    return np.mean(probabilities, axis=0)
+# Separate narratives and subnarratives
+narrative_labels = {label["label"]: label["idx"] for label in all_labels if label["type"] == "N"}
+subnarrative_labels = {label["label"]: label["idx"] for label in all_labels if label["type"] == "S"}
 
-def postprocess_predictions(probabilities, threshold=0.5):
-    return (probabilities > threshold).astype(int)
+# Save narrative labels
+with open("narrative_labels.json", "w") as f:
+    json.dump({"label_to_idx": narrative_labels}, f, indent=4)
 
-def evaluate_ensemble(models_narrative, models_subnarrative, tokenizer, dev_texts, dev_labels, output_file):
-    narrative_probs = ensemble_predictions(models_narrative, tokenizer, dev_texts)
-    subnarrative_probs = ensemble_predictions(models_subnarrative, tokenizer, dev_texts)
+# Save subnarrative labels
+with open("subnarrative_labels.json", "w") as f:
+    json.dump({"label_to_idx": subnarrative_labels}, f, indent=4)
 
-    narrative_preds = postprocess_predictions(narrative_probs)
-    subnarrative_preds = postprocess_predictions(subnarrative_probs)
+print("Labels saved to narrative_labels.json and subnarrative_labels.json")
 
-    f1_macro_narrative = f1_score(dev_labels["narratives"], narrative_preds, average="macro", zero_division=1)
-    f1_macro_subnarrative = f1_score(dev_labels["subnarratives"], subnarrative_preds, average="macro", zero_division=1)
 
-    print(f"F1 Macro (Narrative): {f1_macro_narrative}")
-    print(f"F1 Macro (Subnarrative): {f1_macro_subnarrative}")
+# Function to make predictions
+def predict_labels(model, tokenizer, texts, label_to_idx):
+    tokenized = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+    outputs = model(**tokenized)
+    logits = outputs.logits.detach().numpy()
+    probabilities = 1 / (1 + np.exp(-logits))  # Sigmoid
+    predictions = (probabilities > 0.5).astype(int)  # Threshold = 0.5
+    idx_to_label = {v: k for k, v in label_to_idx.items()}
+    return [[idx_to_label[idx] for idx, val in enumerate(pred) if val == 1] for pred in predictions]
 
-    with open(output_file, "w", encoding="utf-8") as f:
-        for i, text in enumerate(dev_texts):
-            f.write(f"{text}\t{narrative_preds[i]}\t{subnarrative_preds[i]}\n")
+# Load development set
+dev_path = "/content/Semeval-Task10-Hindi/data/hindi_subtask-2-documents"
+texts = []
+article_ids = []
 
-if __name__ == "__main__":
-    dev_data_path = "data/hindi_dev_dataset.json"
-    narrative_model_paths = ["/content/drive/MyDrive/hindi_narrative_models/narrative_model_seed_42",
-                             "/content/drive/MyDrive/hindi_narrative_models/narrative_model_seed_123",
-                             "/content/drive/MyDrive/hindi_narrative_models/narrative_model_seed_456"]
-    subnarrative_model_paths = ["/content/drive/MyDrive/hindi_subnarrative_models/subnarrative_model_seed_42",
-                                "/content/drive/MyDrive/hindi_subnarrative_models/subnarrative_model_seed_123",
-                                "/content/drive/MyDrive/hindi_subnarrative_models/subnarrative_model_seed_456"]
-    output_file = "/content/drive/MyDrive/hindi_submission.txt"
+for file_name in os.listdir(dev_path):
+    if file_name.endswith(".txt"):
+        file_path = os.path.join(dev_path, file_name)
+        with open(file_path, "r", encoding="utf-8") as file:
+            content = file.read()
+            texts.append(content)
+            article_ids.append(file_name.replace(".txt", ""))  # Use the file name as article ID
 
-    with open(dev_data_path, "r", encoding="utf-8") as f:
-        dev_data = json.load(f)
+# Predict narratives
+with open("narrative_labels.json", "r") as f:
+    narrative_label_to_idx = json.load(f)["label_to_idx"]
+narrative_predictions = predict_labels(narrative_model, narrative_tokenizer, texts, narrative_label_to_idx)
 
-    dev_texts = [article["content"] for article in dev_data]
-    dev_labels = {"narratives": [article["narratives"] for article in dev_data],
-                  "subnarratives": [article["subnarratives"] for article in dev_data]}
+# Predict subnarratives
+with open("subnarrative_labels.json", "r") as f:
+    subnarrative_label_to_idx = json.load(f)["label_to_idx"]
+subnarrative_predictions = predict_labels(subnarrative_model, subnarrative_tokenizer, texts, subnarrative_label_to_idx)
 
-    tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-base")
-    evaluate_ensemble(narrative_model_paths, subnarrative_model_paths, tokenizer, dev_texts, dev_labels, output_file)
+# Format predictions
+submission = []
+for article_id, narratives, subnarratives in zip(article_ids, narrative_predictions, subnarrative_predictions):
+    narrative_str = ";".join(narratives) if narratives else "Other"
+    subnarrative_str = ";".join(subnarratives) if subnarratives else "Other"
+    submission.append(f"{article_id}.txt\t{narrative_str}\t{subnarrative_str}")
+
+# Save to submission file
+with open("submission.txt", "w", encoding="utf-8") as f:
+    f.write("\n".join(submission))
+
+print("Predictions saved to submission.txt")

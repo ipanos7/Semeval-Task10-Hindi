@@ -6,6 +6,8 @@ from sklearn.metrics import f1_score
 from scipy.special import expit
 from datasets import Dataset
 import json
+import torch
+from torch.nn import BCEWithLogitsLoss
 
 # --- Prepare Subnarrative Labels ---
 def prepare_labels_for_subnarratives(training_data, all_labels):
@@ -27,6 +29,16 @@ def prepare_labels_for_subnarratives(training_data, all_labels):
 def tokenize(batch):
     return tokenizer(batch["text"], padding="max_length", truncation=True, max_length=512)
 
+# --- Custom Trainer ---
+class CustomTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits = outputs.logits
+        loss_fct = BCEWithLogitsLoss()
+        loss = loss_fct(logits, labels.float())
+        return (loss, outputs) if return_outputs else loss
+
 # --- Metrics ---
 def compute_metrics(pred):
     logits, labels = pred
@@ -36,12 +48,11 @@ def compute_metrics(pred):
     return {"f1_macro": f1}
 
 # --- Training with Repeated KFold ---
-# --- Training with Repeated KFold ---
 def train_with_repeated_kfold_and_save(texts, labels):
     dataset = Dataset.from_dict({"text": texts, "label": labels.tolist()})
     dataset = dataset.map(tokenize, batched=True)
 
-    rskf = RepeatedStratifiedKFold(n_splits=5, n_repeats=10, random_state=42)  # Adjusted to 10 repeats for consistency
+    rskf = RepeatedStratifiedKFold(n_splits=5, n_repeats=2, random_state=42)
     labels_flat = labels.argmax(axis=1)
 
     all_f1_scores = []
@@ -52,7 +63,7 @@ def train_with_repeated_kfold_and_save(texts, labels):
         val_dataset = dataset.select(val_idx)
 
         model = XLMRobertaForSequenceClassification.from_pretrained(
-            "xlm-roberta-base", num_labels=labels.shape[1]
+            "xlm-roberta-large", num_labels=labels.shape[1]
         )
 
         training_args = TrainingArguments(
@@ -60,9 +71,9 @@ def train_with_repeated_kfold_and_save(texts, labels):
             evaluation_strategy="epoch",
             save_strategy="epoch",
             logging_dir=f"./logs_fold_{fold}",
-            per_device_train_batch_size=8,
-            per_device_eval_batch_size=8,
-            num_train_epochs=100,
+            per_device_train_batch_size=4,  # Reduce batch size for memory
+            per_device_eval_batch_size=4,
+            num_train_epochs=20,
             warmup_steps=500,
             weight_decay=0.01,
             logging_steps=10,
@@ -74,15 +85,14 @@ def train_with_repeated_kfold_and_save(texts, labels):
             fp16=True
         )
 
-
-        trainer = Trainer(
+        trainer = CustomTrainer(
             model=model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             tokenizer=tokenizer,
             compute_metrics=compute_metrics,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=10)],
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=5)],
         )
         trainer.train()
 
@@ -96,28 +106,24 @@ def train_with_repeated_kfold_and_save(texts, labels):
         all_f1_scores.append(f1)
         print(f"F1 Score for fold {fold+1}: {f1}")
 
-
     mean_f1 = np.mean(all_f1_scores)
     print(f"\n=== Mean F1 Score (RepeatedStratifiedKFold): {mean_f1} ===")
 
-
     # Save the final best model
-    final_output_dir = "/content/drive/MyDrive/upd_hindi_subnarrative_model"
+    final_output_dir = "/content/drive/MyDrive/hindi_xlmrlarge_subnarrative_model"
     model.save_pretrained(final_output_dir)
     tokenizer.save_pretrained(final_output_dir)
     print(f"Subnarrative model and tokenizer saved to {final_output_dir}.")
 
     # Save final metrics
-    with open("/content/drive/MyDrive/upd_hindi_subnarrative_model/final_metrics.json", "w") as f:
+    with open("/content/drive/MyDrive/hindi_xlmrlarge_subnarrative_model/final_metrics.json", "w") as f:
         json.dump({"mean_f1": mean_f1, "fold_f1_scores": all_f1_scores}, f, indent=4)
-        
     return mean_f1
-
 
 # --- Main Script ---
 if __name__ == "__main__":
     current_dir = os.path.dirname(__file__)
-    data_path = os.path.join(current_dir, "data", "hindi_training_dataset.json")
+    data_path = os.path.join(current_dir, "data", "final_hindi_training_dataset.json")
     labels_path = os.path.join(current_dir, "data", "hindi_all_labels.json")
 
     print("Loading data...")
@@ -129,8 +135,7 @@ if __name__ == "__main__":
     print("Preparing subnarrative labels...")
     texts, labels, label_to_idx = prepare_labels_for_subnarratives(training_data, all_labels)
 
-    tokenizer = XLMRobertaTokenizer.from_pretrained("xlm-roberta-base")
+    tokenizer = XLMRobertaTokenizer.from_pretrained("xlm-roberta-large")
 
-    print("Training model...")
-    mean_f1 = train_with_repeated_kfold_and_save(texts, labels)
-    print(f"Final Mean F1 Score: {mean_f1}")
+    print("Training with Repeated Stratified K-Fold and saving the model...")
+    train_with_repeated_kfold_and_save(texts, labels)
