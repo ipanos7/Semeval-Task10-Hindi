@@ -31,7 +31,7 @@ def tokenize(batch):
 
 # --- Custom Trainer ---
 class CustomTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.logits
@@ -39,13 +39,14 @@ class CustomTrainer(Trainer):
         loss = loss_fct(logits, labels.float())
         return (loss, outputs) if return_outputs else loss
 
+
 # --- Metrics ---
 def compute_metrics(pred):
     logits, labels = pred
     probabilities = expit(logits)
     predictions = (probabilities > 0.5).astype(int)
-    f1 = f1_score(labels, predictions, average="macro", zero_division=1)
-    return {"f1_macro": f1}
+    f1 = f1_score(labels, predictions, average="samples", zero_division=1)
+    return {"f1_samples": f1}
 
 # --- Training with Repeated KFold ---
 def train_with_repeated_kfold_and_save(texts, labels):
@@ -71,14 +72,14 @@ def train_with_repeated_kfold_and_save(texts, labels):
             evaluation_strategy="epoch",
             save_strategy="epoch",
             logging_dir=f"./logs_fold_{fold}",
-            per_device_train_batch_size=4,  # Reduce batch size for memory
-            per_device_eval_batch_size=4,
+            per_device_train_batch_size=8,  # Reduce batch size for memory
+            per_device_eval_batch_size=8,
             num_train_epochs=20,
             warmup_steps=500,
             weight_decay=0.01,
             logging_steps=10,
             load_best_model_at_end=True,
-            metric_for_best_model="f1_macro",
+            metric_for_best_model="f1_samples",
             save_total_limit=1,
             learning_rate=5e-5,
             lr_scheduler_type="linear",
@@ -102,7 +103,7 @@ def train_with_repeated_kfold_and_save(texts, labels):
         probabilities = expit(logits)
         predicted_labels = (probabilities > 0.5).astype(int)
 
-        f1 = f1_score(val_dataset["label"], predicted_labels, average="macro", zero_division=1)
+        f1 = f1_score(val_dataset["label"], predicted_labels, average="samples", zero_division=1)
         all_f1_scores.append(f1)
         print(f"F1 Score for fold {fold+1}: {f1}")
 

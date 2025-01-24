@@ -38,14 +38,14 @@ def predict_labels(model, tokenizer, texts, label_to_idx):
     idx_to_label = {v: k for k, v in label_to_idx.items()}
     return [[idx_to_label[idx] for idx, val in enumerate(pred) if val == 1] for pred in predictions]
 
-# Load development set
-dev_path = "/content/Semeval-Task10-Hindi/data/hindi_subtask-2-documents"
+# Load test set
+test_path = "/content/Semeval-Task10-Hindi/data/test_hindi_subtask-2-documents"
 texts = []
 article_ids = []
 
-for file_name in os.listdir(dev_path):
+for file_name in os.listdir(test_path):
     if file_name.endswith(".txt"):
-        file_path = os.path.join(dev_path, file_name)
+        file_path = os.path.join(test_path, file_name)
         with open(file_path, "r", encoding="utf-8") as file:
             content = file.read()
             texts.append(content)
@@ -69,7 +69,7 @@ for article_id, narratives, subnarratives in zip(article_ids, narrative_predicti
     submission.append(f"{article_id}.txt\t{narrative_str}\t{subnarrative_str}")
 
 # Save to submission file
-with open("hindi_dev_submission.txt", "w", encoding="utf-8") as f:
+with open("hindi_test_submission.txt", "w", encoding="utf-8") as f:
     f.write("\n".join(submission))
 
 print("Predictions saved to submission.txt")

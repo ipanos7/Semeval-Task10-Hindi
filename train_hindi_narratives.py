@@ -31,13 +31,14 @@ def tokenize(batch):
 
 # --- Custom Loss Function ---
 class CustomTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.logits
         loss_fct = BCEWithLogitsLoss()
         loss = loss_fct(logits, labels.float())
         return (loss, outputs) if return_outputs else loss
+
 
 # --- Metrics ---
 def compute_metrics(pred):
@@ -71,8 +72,8 @@ def train_with_repeated_kfold_and_save(texts, labels):
             evaluation_strategy="epoch",
             save_strategy="epoch",
             logging_dir=f"./logs_fold_{fold}",
-            per_device_train_batch_size=4,  # Adjust for memory
-            per_device_eval_batch_size=4,
+            per_device_train_batch_size=8,  # Adjust for memory
+            per_device_eval_batch_size=8,
             num_train_epochs=20,
             warmup_steps=500,
             weight_decay=0.01,
